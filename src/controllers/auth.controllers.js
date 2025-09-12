@@ -1,0 +1,394 @@
+import { log } from "console";
+import { User } from "../models/user.models.js";
+import { ApiError } from "../utils/api-error.js";
+import { ApiResponse } from "../utils/api-response.js";
+import { asyncHandler } from "../utils/async.handler.js";
+import crypto from "crypto";
+import jwt from "jsonwebtoken";
+
+// need to delete later
+const getAllUsers = asyncHandler(async (req, res) => {
+  const users = await User.find();
+  return res
+    .status(200)
+    .json(new ApiResponse(200, users, "All users fetched successfully"));
+});
+
+const deleteAllUsers = asyncHandler(async (req, res) => {
+  await User.deleteMany();
+  return res
+    .status(200)
+    .json(new ApiResponse(200, null, "All users deleted successfully"));
+});
+
+const registerUser = asyncHandler(async (req, res) => {
+  const { email, password, username, fullname } = req.body;
+
+  try {
+    const existingUser = await User.findOne({
+      $or: [{ username: username }, { email: email }],
+    });
+    if (existingUser) {
+      throw new ApiError(400, "User Already exist please log in");
+    }
+    const user = await User.create({
+      username,
+      email,
+      fullname,
+      password,
+    });
+    // generate access,emailverification,refreshtoken
+    const emailVerificationToken = user.generateEmailVerificationToken();
+    // send verification email to user
+    // await sendVerificationEmail(user.email, emailVerificationToken);
+    // await sendWelcomeEmail(user.email, user.fullname);
+
+    const savedUser = await user.save();
+    if (!savedUser) {
+      throw new ApiError(400, "Error while creating User Please try again");
+    }
+    const userToReturn = await User.findById(savedUser._id).select(
+      "-password -refreshToken -emailVerificationTokenExpiry -forgotPasswordToken -forgotPasswordTokenExpiry",
+    );
+    return res
+      .status(200)
+      .json(
+        new ApiResponse(
+          200,
+          { userToReturn, emailVerificationToken },
+          "User created succesfully",
+        ),
+      );
+  } catch (error) {
+    return res
+      .status(500)
+      .json(new ApiError(500, "Internal Server Error", error.message));
+  }
+});
+
+const loginUser = asyncHandler(async (req, res) => {
+  const { email, username, password } = req.body;
+  try {
+    if (!(email || username)) {
+      throw new ApiError(401, "provide credintial");
+    }
+    const user = await User.findOne({
+      $or: [{ username }, { email }],
+    });
+    if (!user) {
+      throw new ApiError(401, "Wrong Credintial");
+    }
+    const goodPasswordCheck = await user.isPasswordCorrect(password);
+    if (!goodPasswordCheck) {
+      throw new ApiError(401, "Wrong Credintial");
+    }
+    const accessToken = user.generateAccessToken();
+    const refreshToken = user.generateRefreshToken();
+    const options = {
+      httpOnly: true,
+      secure: true,
+    };
+    return res
+      .status(200)
+      .cookie("accessToken", accessToken, options)
+      .cookie("refreshToken", refreshToken, options)
+      .json(
+        new ApiResponse(
+          200,
+          { user, accessToken, refreshToken },
+          "User log in successful",
+        ),
+      );
+  } catch (error) {
+    return res
+      .status(500)
+      .json(new ApiError(500, "Internal Server Error", error.message));
+  }
+});
+
+const logoutUser = asyncHandler(async (req, res) => {
+  try {
+    await User.findByIdAndUpdate(
+      req._id,
+      {
+        $unset: {
+          refreshToken: 1,
+        },
+      },
+      {
+        new: true,
+      },
+    );
+    const options = {
+      httpOnly: true,
+      secure: true,
+    };
+
+    return res
+      .status(200)
+      .clearCookie("accessToken", options)
+      .clearCookie("refreshToken", options)
+      .json(new ApiResponse(200, {}, "User logged Out"));
+  } catch (error) {
+    return res
+      .status(500)
+      .json(new ApiError(500, "Internal Server Error", error.message));
+  }
+});
+
+const verifyEmail = asyncHandler(async (req, res) => {
+  const token = req.params.token;
+  // console.log(token);
+
+  try {
+    if (!token) {
+      throw new ApiError(401, "Not a valid link");
+    }
+    const hashedToken = crypto.createHash("sha256").update(token).digest("hex");
+    const user = await User.findOne({
+      emailVerificationToken: hashedToken,
+      emailVerificationTokenExpiry: { $gt: Date.now() },
+    });
+    if (!user) {
+      throw new ApiError(401, "Not a valid Token");
+    }
+    if (user.emailVerificationTokenExpiry < Date.now()) {
+      user.emailVerificationTokenExpiry = undefined;
+      user.emailVerificationToken = undefined;
+      await user.save();
+      return res.status(300).json(new ApiResponse(300, null, "Link exprired"));
+    }
+    user.isEmailVerified = true;
+    user.emailVerificationTokenExpiry = undefined;
+    user.emailVerificationToken = undefined;
+    await user.save();
+    return res
+      .status(200)
+      .json(new ApiResponse(200, null, "Email verified succesfully"));
+  } catch (error) {
+    return res
+      .status(500)
+      .json(new ApiError(500, "Internal Server Error", error.message));
+  }
+});
+
+const resendVerificationEmail = asyncHandler(async (req, res) => {
+  const { email } = req.body;
+  try {
+    const user = await User.findOne({ email });
+    if (!user) {
+      throw new ApiError(400, "Invalid email");
+    }
+    if (user.isEmailVerified) {
+      return res
+        .status(200)
+        .json(new ApiResponse(200, null, "User Already verified"));
+    }
+    token = await user.generateEmailVerificationToken();
+    // send mail here
+    return res
+      .status(200)
+      .json(new ApiResponse(200, token, "Check your email"));
+  } catch (error) {
+    return res
+      .status(500)
+      .json(new ApiError(500, "Internal Server Error", error.message));
+  }
+});
+
+const refreshAccessToken = asyncHandler(async (req, res) => {
+  const incomingRefreshToken =
+    req.cookies.refreshToken || req.body.refreshToken;
+  try {
+    if (!incomingRefreshToken) {
+      throw new ApiError(401, "No refresh token present");
+    }
+    const decodedToken = jwt.verify(
+      incomingRefreshToken,
+      process.env.JWT_REFRESH_TOKEN_SECRET,
+    );
+    const user = await User.findOne({ _id: decodedToken._id });
+    if (!user) {
+      throw new ApiError(401, "Unauthorized Access");
+    }
+    if (
+      incomingRefreshToken !== user?.refreshToken &&
+      user.refreshTokenExpiry > Date.now()
+    ) {
+      throw new ApiError(401, "Refresh token is expired or used");
+    }
+    // generate tokens
+    const accessToken = user.generateAccessToken();
+    const refreshToken = user.generateRefreshToken();
+
+    const options = {
+      httpOnly: true,
+      secure: true,
+    };
+    return res
+      .status(200)
+      .cookie("accessToken", accessToken, options)
+      .cookie("refreshToken", refreshToken, options)
+      .json(
+        new ApiResponse(
+          200,
+          { accessToken, refreshToken },
+          "Access token refreshed",
+        ),
+      );
+  } catch (error) {
+    return res
+      .status(500)
+      .json(new ApiError(500, "Internal Server Error", error.message));
+  }
+});
+
+const resetForgottenPassword = asyncHandler(async (req, res) => {
+  const token = req.params.token;
+  const newPassword = req.body.password;
+  try {
+    if (!token) {
+      throw new ApiError(401, "Not a valid link");
+    }
+    if (!newPassword) {
+      throw new ApiError(401, "Provide a new password");
+    }
+    const hashedToken = crypto
+        .createHash("sha256")
+        .update(token)
+        .digest("hex");
+    const user = await User.findOne({
+      forgotPasswordToken: hashedToken,
+      forgotPasswordTokenExpiry: { $gt: Date.now() },
+    });
+    if (!user) {
+      throw new ApiError(401, "Invalid Token");
+    }
+    if (user.forgotPasswordTokenExpiry < Date.now()) {
+      user.forgotPasswordToken = undefined;
+      user.forgotPasswordTokenExpiry = undefined;
+      await user.save();
+      return res.status(300).json(new ApiResponse(300, null, "Link expired"));
+    }
+    user.password = newPassword;
+    user.forgotPasswordToken = undefined;
+    user.forgotPasswordTokenExpiry = undefined;
+    await user.save();
+    return res
+      .status(200)
+      .json(new ApiResponse(200, null, "Password reset successfully"));
+  } catch (error) {
+    return res
+      .status(500)
+      .json(new ApiError(500, "Internal Server Error", error.message));
+  }
+});
+
+const forgotPasswordRequest = asyncHandler(async (req, res) => {
+  const email = req.body.email;
+  try {
+    if (!email) {
+      throw new ApiError(400, "Email is required");
+    }
+    const user = await User.findOne({ email });
+    if (!user) {
+      throw new ApiError(401, "Not a registered Email");
+    }
+    const token = await user.generateForgotPasswordToken();
+    if (!token) {
+      throw new ApiError(401, "token generation Failed");
+    }
+    await user.save();
+    // send token via email"
+    return res
+      .status(200)
+      .json(
+        new ApiResponse(
+          200,
+          token,
+          "Check your registered Email",
+        ),
+      );
+  } catch (error) {
+    return res
+      .status(500)
+      .json(new ApiError(500, "Internal Server Error", error.message));
+  }
+});
+
+const changeCurrentPassword = asyncHandler(async (req, res) => {
+  const incomingRefreshToken =
+    req.cookies.refreshToken || req.body.refreshToken;
+  const newPassword = req.body.password;
+  try {
+    if (!incomingRefreshToken) {
+      throw new ApiError(401, "Give a registerd Email");
+    }
+    if (!newPassword) {
+      throw new ApiError(401, "Provide a new password");
+    }
+    const decodedToken = jwt.decode(
+      incomingRefreshToken,
+      process.env.JWT_REFRESH_TOKEN_SECRET,
+    );
+    if (!decodedToken) {
+      throw new ApiError(401, "Failed to Decode token");
+    }
+    const user = await User.findOne({ _id: decodedToken._id });
+    if (!user) {
+      throw new ApiError(401, "User not Found");
+    }
+    user.password = newPassword;
+    const updatedUser = await user.save();
+    // console.log(updatedUser);
+
+    return res
+      .status(200)
+      .json(new ApiResponse(200, updatedUser, "Password changed successfully"));
+  } catch (error) {
+    return res
+      .status(500)
+      .json(new ApiError(500, "Internal Server Error", error.message));
+  }
+});
+
+const getProfile = asyncHandler(async (req, res) => {
+  const incomingRefreshToken =
+    req.cookies.refreshToken || req.body.refreshToken;
+  try {
+    if (!incomingRefreshToken) {
+      throw new ApiError(401, "Please login");
+    }
+    const decodedToken = jwt.decode(
+      incomingRefreshToken,
+      process.env.JWT_REFRESH_TOKEN_SECRET,
+    );
+    const user = await User.findOne({ _id: decodedToken._id }).select(
+      "-password -refreshToken -refreshTokenExpiry -emailVerificationToken -emailVerificationTokenExpiry -forgotPasswordToken -forgotPasswordTokenExpiry",
+    );
+    if (!user) {
+      throw new ApiError(401, "User not Found");
+    }
+    return res
+      .status(200)
+      .json(new ApiResponse(200, user, "User profile fetched successfully"));
+  } catch (error) {
+    return res
+      .status(500)
+      .json(new ApiError(500, "Internal Server Error", error.message));
+  }
+});
+export {
+  deleteAllUsers,
+  getAllUsers,
+  registerUser,
+  loginUser,
+  logoutUser,
+  verifyEmail,
+  resendVerificationEmail,
+  refreshAccessToken,
+  resetForgottenPassword,
+  forgotPasswordRequest,
+  changeCurrentPassword,
+  getProfile,
+};
