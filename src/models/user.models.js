@@ -54,6 +54,10 @@ const userSchema = new mongoose.Schema(
       type: String,
       default: null,
     },
+    refreshTokenExpiry: {
+      type: Date,
+      default: null,
+    },
     forgotPasswordToken: {
       type: String,
       default: null,
@@ -96,7 +100,10 @@ userSchema.methods.generateEmailVerificationToken = function () {
 userSchema.methods.generateForgotPasswordToken = function () {
   const token = crypto.randomBytes(32).toString("hex");
   // store hashed token in db for security
-  this.forgotPasswordToken = crypto.createHash("sha256").update(token).digest("hex");
+  this.forgotPasswordToken = crypto
+    .createHash("sha256")
+    .update(token)
+    .digest("hex");
   this.forgotPasswordTokenExpiry = Date.now() + 10 * 60 * 1000;
   return token;
 };

@@ -3,7 +3,6 @@ import { ApiError } from "../utils/api-error.js";
 
 import jwt from "jsonwebtoken";
 import { User } from "./../models/user.models.js";
-import { Project } from "./../models/project.models.js";
 import { ProjectMember } from "./../models/projectmember.models.js";
 import mongoose from "mongoose";
 
@@ -34,8 +33,9 @@ export const validateProjectPermission = (roles = []) =>
   asyncHandler(async (req, res, next) => {
     const { projectId } = req.params;
     if (!projectId) {
-      throw new ApiError(401, "Project is missing");
+      throw new ApiError(401, "ProjectId is missing");
     }
+    // check user is part of project or not
     const projectDetails = await ProjectMember.findOne({
       project: mongoose.Types.ObjectId(projectId),
       user: mongoose.Types.ObjectId(req.user._id),
@@ -43,6 +43,7 @@ export const validateProjectPermission = (roles = []) =>
     if (!projectDetails) {
       throw new ApiError(401, "Project not found");
     }
+    // check user role
     const givenrole = projectDetails?.role;
     // add role details into req.user
     req.user.role = givenrole;
