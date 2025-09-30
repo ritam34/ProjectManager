@@ -3,7 +3,12 @@ import { ApiResponse } from "../utils/api-response.js";
 import { ProjectMember } from "../models/projectmember.models.js";
 import { Project } from "../models/project.models.js";
 import { AvailableUserRoles, UserRolesEnum } from "../utils/constants.js";
-import {asyncHandler} from "../utils/async.handler.js"
+import { asyncHandler } from "../utils/async.handler.js";
+import mongoose from "mongoose";
+import { User } from "../models/user.models.js";
+import { Task } from "../models/task.models.js";
+import { Subtask } from "../models/subtask.models.js";
+import { Note } from "./../models/note.models.js";
 
 // check all controllers
 const getAllProject = asyncHandler(async (req, res) => {
@@ -13,18 +18,37 @@ const getAllProject = asyncHandler(async (req, res) => {
       throw new ApiError(400, "please log in required");
     }
     // in projectMember find where roles equal to _id
-    const projects = await ProjectMember.find({ user: _id }).populate(
-      "project",
-      "name description createdBy",
-    );
+    const projects = await ProjectMember.aggregate([
+      { $match: { user: _id } },
+      {
+        $lookup: {
+          from: "projects",
+          localField: "project",
+          foreignField: "_id",
+          as: "projectDetails",
+        },
+      },
+      { $unwind: "$projectDetails" },
+      {
+        $replaceRoot: { newRoot: "$projectDetails" },
+      },
+    ]);
+
     if (!projects) {
       throw new ApiError(400, "you do not have any project");
     }
-    return res
-      .status(200)
-      .json(new ApiResponse(200, projects, "Projects fetched successfully"));
+    return res.status(200).json(
+      new ApiResponse(
+        200,
+        {
+          project: projects.length === 0 ? null : projects,
+          projectCount: projects.length,
+        },
+        "Projects fetched successfully",
+      ),
+    );
   } catch (error) {
-    throw new ApiError(500, "Internal server Error", error.message);
+    throw new ApiError(500, error.message || "Internal server Error");
   }
 });
 
@@ -34,27 +58,58 @@ const getProjectById = asyncHandler(async (req, res) => {
     if (!projectId) {
       throw new ApiError(400, "give a project id");
     }
-    //
-    if (req.user.role) {
-      const project = await ProjectMember.findOne({
-        projectId,
-        user: req.user._id,
-      }).populate("project", "createdBy title description");
-      if (!project) {
+
+    if (
+      req.user.role === UserRolesEnum.ADMIN ||
+      req.user.role === UserRolesEnum.PROJECT_ADMIN ||
+      req.user.role === UserRolesEnum.MEMBER
+    ) {
+      const projectDetails = await ProjectMember.aggregate([
+        {
+          $match: {
+            user: new mongoose.Types.ObjectId(req.user._id),
+            project: new mongoose.Types.ObjectId(projectId),
+          },
+        },
+        {
+          $lookup: {
+            from: "projects",
+            localField: "project",
+            foreignField: "_id",
+            as: "projectDetails",
+          },
+        },
+        { $unwind: "$projectDetails" },
+        {
+          // merge role from ProjectMember with projectDetails
+          $addFields: {
+            role: "$role",
+          },
+        },
+        {
+          $replaceRoot: {
+            newRoot: {
+              $mergeObjects: ["$projectDetails", { role: "$role" }],
+            },
+          },
+        },
+      ]);
+      if (!projectDetails) {
         throw new ApiError(400, "you are not a member of this project");
       }
+      return res
+        .status(200)
+        .json(
+          new ApiResponse(200, projectDetails, "Project fetched successfully"),
+        );
     } else {
       throw new ApiError(
         400,
         "give a valid project id or you are not a member of this project",
       );
     }
-
-    return res
-      .status(200)
-      .json(new ApiResponse(200, project, "Project fetched successfully"));
   } catch (error) {
-    throw new ApiError(500, "Internal server Error", error.message);
+    throw new ApiError(500, error.message || "Internal server Error");
   }
 });
 
@@ -69,14 +124,19 @@ const createProject = asyncHandler(async (req, res) => {
       title,
       description,
     });
-    if (!newProject) {
+    const projectMember = await ProjectMember.create({
+      user: req.user._id,
+      project: newProject._id,
+      role: UserRolesEnum.ADMIN,
+    });
+    if (!newProject || !projectMember) {
       throw new ApiError(400, "project not created");
     }
     return res
       .status(200)
       .json(new ApiResponse(200, newProject, "Project created successfully"));
   } catch (error) {
-    throw new ApiError(500, "Internal server Error", error.message);
+    throw new ApiError(500, error.message || "Internal server Error");
   }
 });
 
@@ -90,40 +150,85 @@ const updateProject = asyncHandler(async (req, res) => {
     if (!title || !description) {
       throw new ApiError(400, "give a title or description to update");
     }
-    const project = await Project.findOneAndUpdate(
-      { projectId, createdBy: req.user._id },
+    const projectDetails = await Project.findOneAndUpdate(
+      { _id: new mongoose.Types.ObjectId(projectId) },
       { title, description },
       { new: true },
     ).populate("createdBy", "username fullname avatar");
-    if (!project) {
+    if (!projectDetails) {
       throw new ApiError(400, "project not found");
     }
     return res
       .status(200)
-      .json(new ApiResponse(200, project, "project updated successfully"));
+      .json(
+        new ApiResponse(200, projectDetails, "project updated successfully"),
+      );
   } catch (error) {
-    throw new ApiError(500, "Internal server Error", error.message);
+    throw new ApiError(500, error.message || "Internal server Error");
   }
 });
 
 const deleteProject = asyncHandler(async (req, res) => {
   const { projectId } = req.params;
+  const session = await mongoose.startSession();
+  session.startTransaction();
   try {
     if (!projectId) {
       throw new ApiError(400, "give a projectId to delete");
     }
-    const project = await Project.findByIdAndDelete({
-      projectId,
-      createdBy: req.user._id,
-    });
+    const project = await Project.findByIdAndDelete(
+      {
+        _id: projectId,
+        createdBy: req.user._id,
+      },
+      { session },
+    );
     if (!project) {
       throw new ApiError(400, "Project not found");
     }
+    await ProjectMember.deleteMany({ project: project._id }, { session });
+    await Task.deleteMany({ project: project._id }, { session });
+    await Subtask.deleteMany({ project: project._id }, { session });
+    await Note.deleteMany({ project: project._id }, { session });
+
+    // Commit if everything is fine
+    await session.commitTransaction();
+    session.endSession();
     return res
       .status(200)
       .json(new ApiResponse(200, null, "Project delete successfully"));
   } catch (error) {
-    throw new ApiError(500, "Internal server Error", error.message);
+    if (error.message.includes("Transaction numbers are only allowed")) {
+      await session.abortTransaction();
+      session.endSession();
+      try {
+        const project = await Project.findOneAndDelete({
+          _id: req.params.projectId,
+          createdBy: req.user._id,
+        });
+
+        if (!project) {
+          throw new ApiError(
+            404,
+            "Project not found or you don't have permission",
+          );
+        }
+
+        await Promise.all([
+          ProjectMember.deleteMany({ project: project._id }),
+          Task.deleteMany({ project: project._id }),
+          Subtask.deleteMany({ project: project._id }),
+          Note.deleteMany({ project: project._id }),
+        ]);
+
+        return res.status(200).json({
+          success: true,
+          message: "Project and related data deleted successfully",
+        });
+      } catch (error) {
+        throw new ApiError(500, error.message || "Internal server Error");
+      }
+    }
   }
 });
 
@@ -135,37 +240,44 @@ const addMemberToProject = asyncHandler(async (req, res) => {
     if (!projectId) {
       throw new ApiError(400, "give a projectId to add member");
     }
+    const userId = await User.findOne({ username }).select("_id");
+    if (!userId) {
+      throw new ApiError(400, "user not found");
+    }
+    const checkAlreadyMember = await ProjectMember.findOne({
+      project: projectId,
+      user: userId,
+    });
+    if (checkAlreadyMember) {
+      throw new ApiError(
+        400,
+        "user is already a member of this project go to update role",
+      );
+    }
     const project = await Project.findById(projectId);
     //req.user._id should be admin or owner
     if (!project) {
       throw new ApiError(400, "Project not found");
     }
-    if (
-      project.createdBy.toString() !== req.user._id ||
-      req.user.role !== "admin" ||
-      req.user.role !== "project-admin"
-    ) {
-      throw new ApiError(400, "you are not a owner or admin of this project");
+    const isOwner = project.createdBy.toString() === req.user._id.toString();
+    const isAdmin = req.user.role === "admin";
+    const isProjectAdmin = req.user.role === "project-admin";
+
+    if (!(isOwner || isAdmin || isProjectAdmin)) {
+      throw new ApiError(403, "You are not an owner or admin of this project");
     }
     if (!username) {
       throw new ApiError(400, "give a username to add as member");
     }
-    const userId = await User.findOne({ username }).select("_id");
-    if (!userId) {
-      throw new ApiError(400, "user not found");
-    }
-    if (
-      !role ||
-      !UserRolesEnum.includes(role) ||
-      !AvailableUserRoles.includes(role)
-    ) {
+
+    if (!role || !Object.values(AvailableUserRoles).includes(role)) {
       throw new ApiError(400, "give a valid role to update");
     }
     const addMember = await ProjectMember.create({
-      project: projectId,
       user: userId,
+      project: projectId,
       role,
-    }).populate("user", "username avatar fullname");
+    });
     if (!addMember) {
       throw new ApiError(400, "Member not added");
     }
@@ -173,7 +285,7 @@ const addMemberToProject = asyncHandler(async (req, res) => {
       .status(200)
       .json(new ApiResponse(200, addMember, "Member added successfully"));
   } catch (error) {
-    throw new ApiError(500, "Internal server Error", error.message);
+    throw new ApiError(500, error.message || "Internal server Error");
   }
 });
 
@@ -183,10 +295,10 @@ const getProjectMembers = asyncHandler(async (req, res) => {
     if (!projectId) {
       throw new ApiError(400, "give a projectId to fetch");
     }
-    const projectMembers = await ProjectMember.findById(projectId).populate(
-      "user",
-      "username avatar fullname",
-    );
+
+    const projectMembers = await ProjectMember.find({
+      project: new mongoose.Types.ObjectId(projectId),
+    }).populate("user", "username avatar fullname");
     if (!projectMembers) {
       throw new ApiError(400, "ProjectMembers not found");
     }
@@ -196,7 +308,7 @@ const getProjectMembers = asyncHandler(async (req, res) => {
         new ApiResponse(200, projectMembers, "members fetched successfully"),
       );
   } catch (error) {
-    throw new ApiError(500, "Internal server Error", error.message);
+    throw new ApiError(500, error.message || "Internal server Error");
   }
 });
 
@@ -214,15 +326,11 @@ const updateMemberRole = asyncHandler(async (req, res) => {
     if (!userId) {
       throw new ApiError(400, "user not found");
     }
-    if (
-      !role ||
-      !UserRolesEnum.includes(role) ||
-      !AvailableUserRoles.includes(role)
-    ) {
+    if (!role || !Object.values(AvailableUserRoles).includes(role)) {
       throw new ApiError(400, "give a valid role to update");
     }
-    const memberRole = await ProjectMember.findByIdAndUpdate(
-      { userId, projectId },
+    const memberRole = await ProjectMember.findOneAndUpdate(
+      { user: userId, project: projectId },
       { role },
       { new: true },
     );
@@ -233,7 +341,7 @@ const updateMemberRole = asyncHandler(async (req, res) => {
       .status(200)
       .json(new ApiResponse(200, memberRole, "Member update successfully"));
   } catch (error) {
-    throw new ApiError(500, "Internal server Error", error.message);
+    throw new ApiError(500, error.message || "Internal server Error");
   }
 });
 
@@ -242,6 +350,15 @@ const updateMemberRole = asyncHandler(async (req, res) => {
 const deleteMember = asyncHandler(async (req, res) => {
   const { projectId } = req.params;
   const { username } = req.body;
+  const session = await mongoose.startSession();
+  session.startTransaction();
+  if (!username) {
+    throw new ApiError(400, "give a usename to delete member");
+  }
+  const userId = await User.findOne({ username }).select("_id");
+  if (!userId) {
+    throw new ApiError(400, "user not found");
+  }
   try {
     if (
       req.user.role !== UserRolesEnum.ADMIN &&
@@ -252,25 +369,53 @@ const deleteMember = asyncHandler(async (req, res) => {
     if (!projectId) {
       throw new ApiError(400, "give a projectId to delete Member ");
     }
-    if (!username) {
-      throw new ApiError(400, "give a usename to delete member");
-    }
-    const userId = await User.findOne({ username }).select("_id");
-    if (!userId) {
-      throw new ApiError(400, "user not found");
-    }
-    const memberDelete = await ProjectMember.findByIdAndDelete({
-      userId,
-      projectId,
-    });
+    const memberDelete = await ProjectMember.findOneAndDelete(
+      {
+        user: userId,
+        project: projectId,
+      },
+      { session },
+    );
     if (!memberDelete) {
       throw new ApiError(400, "user or project not found to delete");
     }
+    const project = await Project.findById(projectId);
+    await Task.deleteMany({ project: project._id }, { session });
+    await Subtask.deleteMany({ project: project._id }, { session });
+    await Note.deleteMany({ project: project._id }, { session });
+
+    // Commit if everything is fine
+    await session.commitTransaction();
+    session.endSession();
+
     return res
       .status(200)
       .json(new ApiResponse(200, null, "members delete successfully"));
   } catch (error) {
-    throw new ApiError(500, "Internal server Error", error.message);
+    if (error.message.includes("Transaction numbers are only allowed")) {
+      try {
+        await session.abortTransaction();
+        session.endSession();
+        const memberDelete = await ProjectMember.findOneAndDelete({
+          user: userId,
+          project: projectId,
+        });
+        if (!memberDelete) {
+          throw new ApiError(400, "user or project not found to delete");
+        }
+        const project = await Project.findById(projectId);
+        await Promise.all([
+          Task.deleteMany({ project: project._id }),
+          Subtask.deleteMany({ project: project._id }),
+          Note.deleteMany({ project: project._id }),
+        ]);
+        return res
+          .status(200)
+          .json(new ApiResponse(200, null, "members delete successfully"));
+      } catch (error) {
+        throw new ApiError(500, error.message || "Internal server Error");
+      }
+    }
   }
 });
 

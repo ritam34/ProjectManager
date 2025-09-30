@@ -3,6 +3,7 @@ import { ApiError } from "../utils/api-error.js";
 import { TaskStatusEnum } from "../utils/constants.js";
 import { ApiResponse } from "../utils/api-response.js";
 import { Subtask } from "../models/subtask.models.js";
+import {AvailableProjectPriority,AvailableUserRoles} from "../utils/constants.js";
 
 // get all tasks
 const getTasks = async (req, res) => {
@@ -24,7 +25,7 @@ const getTasks = async (req, res) => {
       .status(200)
       .json(new ApiResponse(200, tasks, "Tasks fetched successfully"));
   } catch (error) {
-    throw new ApiError(500, "Internal server Error", error.message);
+    throw new ApiError(500, error.message || "Internal server Error");
   }
 };
 
@@ -48,17 +49,17 @@ const getTaskById = async (req, res) => {
       .status(200)
       .json(new ApiResponse(200, task, "Task fetched successfully"));
   } catch (error) {
-    throw new ApiError(500, "Internal server Error", error.message);
+    throw new ApiError(500, error.message || "Internal server Error");
   }
 };
 
 const createTask = async (req, res) => {
   // create task
-  const { projectId } = req.params;
+  const { projectId } = req.params
   const { title, description, priority, dueDate } = req.body;
   // status,createdBy,project,assignBy,attachments, assignTo
   try {
-    if (req.user.role !== "Admin" || req.user.role !== "project-admin") {
+    if (!Object.values(AvailableUserRoles).includes(req.user.role)) {
       throw new ApiError(403, "you don't have permission to procced");
     }
     if (!title || !description || !priority || !dueDate) {
@@ -66,6 +67,9 @@ const createTask = async (req, res) => {
     }
     if (!projectId) {
       throw new ApiError(400, "ProjectId is required");
+    }
+    if (!Object.values(AvailableProjectPriority).includes(priority)) {
+      throw new ApiError(400, "give a valid priority");
     }
     //create task
     const task = await Task.create({
@@ -87,7 +91,7 @@ const createTask = async (req, res) => {
       .status(200)
       .json(new ApiResponse(200, task, "task created successfully"));
   } catch (error) {
-    throw new ApiError(500, "Internal server Error", error.message);
+    throw new ApiError(500, error.message || "Internal server Error");
   }
 };
 
@@ -146,7 +150,7 @@ const updateTask = async (req, res) => {
       .status(200)
       .json(new ApiResponse(200, task, "task updated successfully"));
   } catch (error) {
-    throw new ApiError(500, "Internal server Error", error.message);
+    throw new ApiError(500, error.message || "Internal server Error");
   }
 };
 
@@ -173,7 +177,7 @@ const deleteTask = async (req, res) => {
       .status(200)
       .json(new ApiResponse(200, task, "task deleted successfully"));
   } catch (error) {
-    throw new ApiError(500, "Internal server Error", error.message);
+    throw new ApiError(500, error.message || "Internal server Error");
   }
 };
 
@@ -216,7 +220,7 @@ const createSubTask = async (req, res) => {
       .status(200)
       .json(new ApiResponse(200, subtask, "subtask created successfully"));
   } catch (error) {
-    throw new ApiError(500, "Internal server Error", error.message);
+    throw new ApiError(500, error.message || "Internal server Error");
   }
 };
 
@@ -240,7 +244,7 @@ const getSubTasks = async (req, res) => {
       .status(200)
       .json(new ApiResponse(200, subtasks, "subtasks fetched successfully"));
   } catch (error) {
-    throw new ApiError(500, "Internal server Error", error.message);
+    throw new ApiError(500, error.message || "Internal server Error");
   }
 };
 
@@ -264,7 +268,7 @@ const getSubTaskById = async (req, res) => {
       .status(200)
       .json(new ApiResponse(200, subtask, "subtask fetched successfully"));
   } catch (error) {
-    throw new ApiError(500, "Internal server Error", error.message);
+    throw new ApiError(500, error.message || "Internal server Error");
   }
 };
 
@@ -332,7 +336,7 @@ const updateSubTask = async (req, res) => {
       .status(200)
       .json(new ApiResponse(200, subtask, "subtask updated successfully"));
   } catch (error) {
-    throw new ApiError(500, "Internal server Error", error.message);
+    throw new ApiError(500, error.message || "Internal server Error");
   }
 };
 
@@ -359,7 +363,7 @@ const deleteSubTask = async (req, res) => {
       .status(200)
       .json(new ApiResponse(200, subtask, "subtask deleted successfully"));
   } catch (error) {
-    throw new ApiError(500, "Internal server Error", error.message);
+    throw new ApiError(500, error.message || "Internal server Error");
   }
 };
 

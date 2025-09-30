@@ -27,7 +27,7 @@ router
   .post(userRegistrationValidator(), validate, registerUser);
 router.route("/login").post(userLoginValidator(), validate, loginUser);
 router.route("/logout").post(verifyJWT, logoutUser);
-router.route("/verify-email/:token").post(verifyEmail);
+router.route("/verify/:token").post(verifyEmail);
 router.route("/resend-verification-email").post(resendVerificationEmail);
 router.route("/refresh-access-token").post(refreshAccessToken); //need to look for do i have to verifyJWT here or not
 router.route("/forgot-password").post(forgotPasswordRequest);

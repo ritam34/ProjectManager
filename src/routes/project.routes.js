@@ -32,7 +32,7 @@ router
   .get(verifyJWT, validateProjectPermission(AvailableUserRoles), getProjectMembers)
   .post(verifyJWT, validateProjectPermission(AvailableUserRoles), addMemberToProject);
 router
-  .route("/:projectId/members/:userId")
+  .route("/:projectId/members")
   .put(verifyJWT, validateProjectPermission(AvailableUserRoles), updateMemberRole)
   .delete(verifyJWT, validateProjectPermission(AvailableUserRoles), deleteMember);
 

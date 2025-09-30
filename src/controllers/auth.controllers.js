@@ -88,9 +88,7 @@ const registerUser = asyncHandler(async (req, res) => {
         ),
       );
   } catch (error) {
-    return res
-      .status(500)
-      .json(new ApiError(500, "Internal Server Error", error.message));
+    throw new ApiError(500, error.message || "Internal server Error");
   }
 });
 
@@ -101,7 +99,7 @@ const loginUser = asyncHandler(async (req, res) => {
       throw new ApiError(401, "provide credintial");
     }
     const user = await User.findOne({ email }).select(
-      "-password -refreshToken -refreshTokenExpiry -emailVerificationToken -emailVerificationTokenExpiry -forgotPasswordToken -forgotPasswordTokenExpiry",
+      "-refreshToken -refreshTokenExpiry -emailVerificationToken -emailVerificationTokenExpiry -forgotPasswordToken -forgotPasswordTokenExpiry",
     );
     if (!user) {
       throw new ApiError(401, "Wrong Credintial");
@@ -113,6 +111,7 @@ const loginUser = asyncHandler(async (req, res) => {
     const accessToken = user.generateAccessToken();
     const refreshToken = user.generateRefreshToken();
     await user.save({ validateBeforeSave: false });
+    user.password = undefined;
     const options = {
       httpOnly: true,
       secure: true,
@@ -129,9 +128,7 @@ const loginUser = asyncHandler(async (req, res) => {
         ),
       );
   } catch (error) {
-    return res
-      .status(500)
-      .json(new ApiError(500, "Internal Server Error", error.message));
+    throw new ApiError(500, error.message || "Internal server Error");
   }
 });
 
@@ -159,9 +156,7 @@ const logoutUser = asyncHandler(async (req, res) => {
       .clearCookie("refreshToken", options)
       .json(new ApiResponse(200, {}, "User logged Out"));
   } catch (error) {
-    return res
-      .status(500)
-      .json(new ApiError(500, "Internal Server Error", error.message));
+    throw new ApiError(500, error.message || "Internal server Error");
   }
 });
 
@@ -194,9 +189,7 @@ const verifyEmail = asyncHandler(async (req, res) => {
       .status(200)
       .json(new ApiResponse(200, null, "Email verified succesfully"));
   } catch (error) {
-    return res
-      .status(500)
-      .json(new ApiError(500, "Internal Server Error", error.message));
+    throw new ApiError(500, error.message || "Internal server Error");
   }
 });
 
@@ -213,6 +206,8 @@ const resendVerificationEmail = asyncHandler(async (req, res) => {
         .json(new ApiResponse(200, null, "User Already verified"));
     }
     const emailVerificationToken = await user.generateEmailVerificationToken();
+    console.log(emailVerificationToken);
+
     await user.save({ validateBeforeSave: false });
     // send mail here
     const transporter = nodemailer.createTransport({
@@ -244,11 +239,9 @@ const resendVerificationEmail = asyncHandler(async (req, res) => {
     // });
     return res
       .status(200)
-      .json(new ApiResponse(200, token, "Check your email"));
+      .json(new ApiResponse(200, verifyLink, "Check your email"));
   } catch (error) {
-    return res
-      .status(500)
-      .json(new ApiError(500, "Internal Server Error", error.message));
+    throw new ApiError(500, error.message || "Internal server Error");
   }
 });
 
@@ -260,29 +253,26 @@ const refreshAccessToken = asyncHandler(async (req, res) => {
     if (!incomingRefreshToken) {
       throw new ApiError(401, "No refresh token present");
     }
-    const decodedToken = jwt.verify(
+    const decodedToken = await jwt.verify(
       incomingRefreshToken,
       process.env.JWT_REFRESH_TOKEN_SECRET,
     );
-    const user = await User.findOne({ _id: decodedToken._id });
-    if (!user) {
-      throw new ApiError(401, "Unauthorized Access");
+    if (!decodedToken) {
+      throw new ApiError(401, "Invalid refresh token or token expired");
     }
-    if (
-      incomingRefreshToken !== user?.refreshToken &&
-      user.refreshTokenExpiry > Date.now()
-    ) {
-      throw new ApiError(401, "Refresh token is expired or used");
+    const user = await User.findById(decodedToken._id);
+    if (!user) {
+      throw new ApiError(401, "Invalid refresh token");
     }
     // generate tokens
     const accessToken = user.generateAccessToken();
     const refreshToken = user.generateRefreshToken();
-    
     await user.save({ validateBeforeSave: false });
 
     const options = {
       httpOnly: true,
-      secure: true,
+      secure: process.env.NODE_ENV === "production",
+      sameSite: "strict",
     };
     return res
       .status(200)
@@ -296,9 +286,7 @@ const refreshAccessToken = asyncHandler(async (req, res) => {
         ),
       );
   } catch (error) {
-    return res
-      .status(500)
-      .json(new ApiError(500, "Internal Server Error", error.message));
+    throw new ApiError(500, error.message || "Internal server Error");
   }
 });
 
@@ -318,7 +306,7 @@ const forgotPasswordRequest = asyncHandler(async (req, res) => {
     }
     await user.save({ validateBeforeSave: false });
     // send token via email"
-const transporter = nodemailer.createTransport({
+    const transporter = nodemailer.createTransport({
       host: process.env.MAIL_SMTP_HOST, // or SMTP
       port: process.env.MAIL_SMTP_PORT,
       secure: false,
@@ -328,7 +316,7 @@ const transporter = nodemailer.createTransport({
       },
     });
 
-    const verifyLink = `http://localhost:4000/api/v1/auth/resetpassword/${token}`;
+    const verifyLink = `http://localhost:4000/api/v1/auth/reset-password/${token}`;
     const mailOptions = {
       from: process.env.MAIL_SMTP_USER,
       to: user.email,
@@ -347,11 +335,9 @@ const transporter = nodemailer.createTransport({
     // });
     return res
       .status(200)
-      .json(new ApiResponse(200, token, "Check your registered Email"));
+      .json(new ApiResponse(200, verifyLink, "Check your registered Email"));
   } catch (error) {
-    return res
-      .status(500)
-      .json(new ApiError(500, "Internal Server Error", error.message));
+    throw new ApiError(500, error.message || "Internal server Error");
   }
 });
 
@@ -387,21 +373,18 @@ const resetForgottenPassword = asyncHandler(async (req, res) => {
       .status(200)
       .json(new ApiResponse(200, null, "Password reset successfully"));
   } catch (error) {
-    return res
-      .status(500)
-      .json(new ApiError(500, "Internal Server Error", error.message));
+    throw new ApiError(500, error.message || "Internal server Error");
   }
 });
 
 const changeCurrentPassword = asyncHandler(async (req, res) => {
- 
   const newPassword = req.body.password;
   try {
     if (!newPassword) {
       throw new ApiError(401, "Provide a new password");
     }
-    
-    const user = await User.findOne({ _id:req.user._id});
+
+    const user = await User.findOne({ _id: req.user._id });
     if (!user) {
       throw new ApiError(401, "User not Found");
     }
@@ -412,15 +395,12 @@ const changeCurrentPassword = asyncHandler(async (req, res) => {
       .status(200)
       .json(new ApiResponse(200, updatedUser, "Password changed successfully"));
   } catch (error) {
-    return res
-      .status(500)
-      .json(new ApiError(500, "Internal Server Error", error.message));
+    throw new ApiError(500, error.message || "Internal server Error");
   }
 });
 
 const getProfile = asyncHandler(async (req, res) => {
   try {
-
     const user = await User.findOne({ _id: req.user._id }).select(
       "-password -refreshToken -refreshTokenExpiry -emailVerificationToken -emailVerificationTokenExpiry -forgotPasswordToken -forgotPasswordTokenExpiry",
     );
@@ -431,9 +411,7 @@ const getProfile = asyncHandler(async (req, res) => {
       .status(200)
       .json(new ApiResponse(200, user, "User profile fetched successfully"));
   } catch (error) {
-    return res
-      .status(500)
-      .json(new ApiError(500, "Internal Server Error", error.message));
+    throw new ApiError(500, error.message || "Internal server Error");
   }
 });
 export {

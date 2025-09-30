@@ -37,8 +37,8 @@ export const validateProjectPermission = (roles = []) =>
     }
     // check user is part of project or not
     const projectDetails = await ProjectMember.findOne({
-      project: mongoose.Types.ObjectId(projectId),
-      user: mongoose.Types.ObjectId(req.user._id),
+      project: projectId,
+      user: req.user._id,
     });
     if (!projectDetails) {
       throw new ApiError(401, "Project not found");
@@ -51,4 +51,5 @@ export const validateProjectPermission = (roles = []) =>
     if (!roles.includes(givenrole)) {
       throw new ApiError(403, "you don't have permission to procced");
     }
+    next();
   });
