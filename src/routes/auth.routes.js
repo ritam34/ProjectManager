@@ -1,16 +1,17 @@
 import { Router } from "express";
 import { validate } from "../middlewares/validator.middlewares.js";
 import {
-  registerUser,
-  getAllUsers,
   deleteAllUsers,
+  getAllUsers,
+  registerUser,
   loginUser,
   logoutUser,
   verifyEmail,
+  resendVerificationEmail,
   refreshAccessToken,
+  resetForgottenPassword,
   forgotPasswordRequest,
   changeCurrentPassword,
-  resetForgottenPassword,
   getProfile,
 } from "../controllers/auth.controllers.js";
 import {
@@ -21,18 +22,20 @@ import { verifyJWT } from "../middlewares/auth.middlewares.js";
 
 const router = Router();
 
-router.post("/register", userRegistrationValidator(), validate, registerUser);
-router.post("/login", userLoginValidator(), validate, loginUser);
-router.post("/logout", verifyJWT, logoutUser);
-router.post("/verify/:token", verifyEmail);//http://localhost:4000/api/v1/auth/verify/844cb44704489c54cbc1d5fd37a2390a208dfabe74bf3bb6b41ec17ce9f3926a
-router.post("/refresh-accesstoken", verifyJWT, refreshAccessToken);
-router.post("/changepassword", verifyJWT, changeCurrentPassword);
-router.post("/forgotpassword", forgotPasswordRequest);
-router.post("/resetpassword/:token", resetForgottenPassword);
-router.get("/profile", verifyJWT, getProfile);
+router
+  .route("/register")
+  .post(userRegistrationValidator(), validate, registerUser);
+router.route("/login").post(userLoginValidator(), validate, loginUser);
+router.route("/logout").post(verifyJWT, logoutUser);
+router.route("/verify-email/:token").post(verifyEmail);
+router.route("/resend-verification-email").post(resendVerificationEmail);
+router.route("/refresh-access-token").post(refreshAccessToken); //need to look for do i have to verifyJWT here or not
+router.route("/forgot-password").post(forgotPasswordRequest);
+router.route("/reset-password/:token").post(resetForgottenPassword);
+router.route("/change-password").post(verifyJWT, changeCurrentPassword);
+router.route("/profile").get(verifyJWT, getProfile);
 
-// need to delete later
-// router.get("/users", getAllUsers);
-// router.delete("/users", deleteAllUsers);
+// Admin routes
+router.route("/users").get(getAllUsers).delete(deleteAllUsers);
 
 export default router;

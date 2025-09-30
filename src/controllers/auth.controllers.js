@@ -1,10 +1,10 @@
-import { log } from "console";
 import { User } from "../models/user.models.js";
 import { ApiError } from "../utils/api-error.js";
 import { ApiResponse } from "../utils/api-response.js";
 import { asyncHandler } from "../utils/async.handler.js";
 import crypto from "crypto";
 import jwt from "jsonwebtoken";
+import nodemailer from "nodemailer";
 
 // need to delete later
 const getAllUsers = asyncHandler(async (req, res) => {
@@ -22,9 +22,11 @@ const deleteAllUsers = asyncHandler(async (req, res) => {
 });
 
 const registerUser = asyncHandler(async (req, res) => {
-  const { email, password, username, fullname } = req.body;
-
   try {
+    const { email, password, username, fullname } = req.body;
+    if (!email || !password || !username || !fullname) {
+      throw new ApiError(400, "Provide user Creadintel");
+    }
     const existingUser = await User.findOne({
       $or: [{ username: username }, { email: email }],
     });
@@ -38,15 +40,41 @@ const registerUser = asyncHandler(async (req, res) => {
       password,
     });
     // generate access,emailverification,refreshtoken
+    user.generateRefreshToken();
     const emailVerificationToken = user.generateEmailVerificationToken();
     // send verification email to user
-    // await sendVerificationEmail(user.email, emailVerificationToken);
-    // await sendWelcomeEmail(user.email, user.fullname);
-
     const savedUser = await user.save();
     if (!savedUser) {
       throw new ApiError(400, "Error while creating User Please try again");
     }
+    const transporter = nodemailer.createTransport({
+      host: process.env.MAIL_SMTP_HOST, // or SMTP
+      port: process.env.MAIL_SMTP_PORT,
+      secure: false,
+      auth: {
+        user: process.env.MAIL_SMTP_USER,
+        pass: process.env.MAIL_SMTP_PASSWORD,
+      },
+    });
+
+    const verifyLink = `http://localhost:4000/api/v1/auth/verify/${emailVerificationToken}`;
+    const mailOptions = {
+      from: process.env.MAIL_SMTP_USER,
+      to: user.email,
+      subject: "Verify Your Email",
+      text: `Click the link to verify your email: ${verifyLink}`,
+      html: `<p>Please click <a href="${verifyLink}">here</a> to verify your email.</p>`,
+    };
+
+    // if want to send real mail after hosting
+    // const emailSendResult = await transporter.sendMail(mailOptions, (error, info) => {
+    //   if (error) {
+    //     console.error("Error sending email:", error);
+    //   } else {
+    //     console.log("Email sent:", info.response);
+    //   }
+    // });
+
     const userToReturn = await User.findById(savedUser._id).select(
       "-password -refreshToken -emailVerificationTokenExpiry -forgotPasswordToken -forgotPasswordTokenExpiry",
     );
@@ -55,7 +83,7 @@ const registerUser = asyncHandler(async (req, res) => {
       .json(
         new ApiResponse(
           200,
-          { userToReturn, emailVerificationToken },
+          { userToReturn, verifyLink },
           "User created succesfully",
         ),
       );
@@ -67,14 +95,14 @@ const registerUser = asyncHandler(async (req, res) => {
 });
 
 const loginUser = asyncHandler(async (req, res) => {
-  const { email, username, password } = req.body;
+  const { email, password } = req.body;
   try {
-    if (!(email || username)) {
+    if (!email || !password) {
       throw new ApiError(401, "provide credintial");
     }
-    const user = await User.findOne({
-      $or: [{ username }, { email }],
-    });
+    const user = await User.findOne({ email }).select(
+      "-password -refreshToken -refreshTokenExpiry -emailVerificationToken -emailVerificationTokenExpiry -forgotPasswordToken -forgotPasswordTokenExpiry",
+    );
     if (!user) {
       throw new ApiError(401, "Wrong Credintial");
     }
@@ -84,6 +112,7 @@ const loginUser = asyncHandler(async (req, res) => {
     }
     const accessToken = user.generateAccessToken();
     const refreshToken = user.generateRefreshToken();
+    await user.save({ validateBeforeSave: false });
     const options = {
       httpOnly: true,
       secure: true,
@@ -138,7 +167,6 @@ const logoutUser = asyncHandler(async (req, res) => {
 
 const verifyEmail = asyncHandler(async (req, res) => {
   const token = req.params.token;
-  // console.log(token);
 
   try {
     if (!token) {
@@ -155,13 +183,13 @@ const verifyEmail = asyncHandler(async (req, res) => {
     if (user.emailVerificationTokenExpiry < Date.now()) {
       user.emailVerificationTokenExpiry = undefined;
       user.emailVerificationToken = undefined;
-      await user.save();
+      await user.save({ validateBeforeSave: false });
       return res.status(300).json(new ApiResponse(300, null, "Link exprired"));
     }
     user.isEmailVerified = true;
     user.emailVerificationTokenExpiry = undefined;
     user.emailVerificationToken = undefined;
-    await user.save();
+    await user.save({ validateBeforeSave: false });
     return res
       .status(200)
       .json(new ApiResponse(200, null, "Email verified succesfully"));
@@ -184,8 +212,36 @@ const resendVerificationEmail = asyncHandler(async (req, res) => {
         .status(200)
         .json(new ApiResponse(200, null, "User Already verified"));
     }
-    token = await user.generateEmailVerificationToken();
+    const emailVerificationToken = await user.generateEmailVerificationToken();
+    await user.save({ validateBeforeSave: false });
     // send mail here
+    const transporter = nodemailer.createTransport({
+      host: process.env.MAIL_SMTP_HOST, // or SMTP
+      port: process.env.MAIL_SMTP_PORT,
+      secure: false,
+      auth: {
+        user: process.env.MAIL_SMTP_USER,
+        pass: process.env.MAIL_SMTP_PASSWORD,
+      },
+    });
+
+    const verifyLink = `http://localhost:4000/api/v1/auth/verify/${emailVerificationToken}`;
+    const mailOptions = {
+      from: process.env.MAIL_SMTP_USER,
+      to: user.email,
+      subject: "Verify Your Email",
+      text: `Click the link to verify your email: ${verifyLink}`,
+      html: `<p>Please click <a href="${verifyLink}">here</a> to verify your email.</p>`,
+    };
+
+    // if want to send real mail after hosting
+    // const emailSendResult = await transporter.sendMail(mailOptions, (error, info) => {
+    //   if (error) {
+    //     console.error("Error sending email:", error);
+    //   } else {
+    //     console.log("Email sent:", info.response);
+    //   }
+    // });
     return res
       .status(200)
       .json(new ApiResponse(200, token, "Check your email"));
@@ -196,6 +252,7 @@ const resendVerificationEmail = asyncHandler(async (req, res) => {
   }
 });
 
+// have to read properly
 const refreshAccessToken = asyncHandler(async (req, res) => {
   const incomingRefreshToken =
     req.cookies.refreshToken || req.body.refreshToken;
@@ -220,6 +277,8 @@ const refreshAccessToken = asyncHandler(async (req, res) => {
     // generate tokens
     const accessToken = user.generateAccessToken();
     const refreshToken = user.generateRefreshToken();
+    
+    await user.save({ validateBeforeSave: false });
 
     const options = {
       httpOnly: true,
@@ -243,6 +302,59 @@ const refreshAccessToken = asyncHandler(async (req, res) => {
   }
 });
 
+const forgotPasswordRequest = asyncHandler(async (req, res) => {
+  const email = req.body.email;
+  try {
+    if (!email) {
+      throw new ApiError(400, "Email is required");
+    }
+    const user = await User.findOne({ email });
+    if (!user) {
+      throw new ApiError(401, "Not a registered Email");
+    }
+    const token = await user.generateForgotPasswordToken();
+    if (!token) {
+      throw new ApiError(401, "token generation Failed");
+    }
+    await user.save({ validateBeforeSave: false });
+    // send token via email"
+const transporter = nodemailer.createTransport({
+      host: process.env.MAIL_SMTP_HOST, // or SMTP
+      port: process.env.MAIL_SMTP_PORT,
+      secure: false,
+      auth: {
+        user: process.env.MAIL_SMTP_USER,
+        pass: process.env.MAIL_SMTP_PASSWORD,
+      },
+    });
+
+    const verifyLink = `http://localhost:4000/api/v1/auth/resetpassword/${token}`;
+    const mailOptions = {
+      from: process.env.MAIL_SMTP_USER,
+      to: user.email,
+      subject: "Reset Your Password",
+      text: `Click the link to reset Password: ${verifyLink}`,
+      html: `<p>Please click <a href="${verifyLink}">here</a> to reset your password.</p>`,
+    };
+
+    // if want to send real mail after hosting
+    // const emailSendResult = await transporter.sendMail(mailOptions, (error, info) => {
+    //   if (error) {
+    //     console.error("Error sending email:", error);
+    //   } else {
+    //     console.log("Email sent:", info.response);
+    //   }
+    // });
+    return res
+      .status(200)
+      .json(new ApiResponse(200, token, "Check your registered Email"));
+  } catch (error) {
+    return res
+      .status(500)
+      .json(new ApiError(500, "Internal Server Error", error.message));
+  }
+});
+
 const resetForgottenPassword = asyncHandler(async (req, res) => {
   const token = req.params.token;
   const newPassword = req.body.password;
@@ -253,10 +365,7 @@ const resetForgottenPassword = asyncHandler(async (req, res) => {
     if (!newPassword) {
       throw new ApiError(401, "Provide a new password");
     }
-    const hashedToken = crypto
-        .createHash("sha256")
-        .update(token)
-        .digest("hex");
+    const hashedToken = crypto.createHash("sha256").update(token).digest("hex");
     const user = await User.findOne({
       forgotPasswordToken: hashedToken,
       forgotPasswordTokenExpiry: { $gt: Date.now() },
@@ -284,63 +393,20 @@ const resetForgottenPassword = asyncHandler(async (req, res) => {
   }
 });
 
-const forgotPasswordRequest = asyncHandler(async (req, res) => {
-  const email = req.body.email;
-  try {
-    if (!email) {
-      throw new ApiError(400, "Email is required");
-    }
-    const user = await User.findOne({ email });
-    if (!user) {
-      throw new ApiError(401, "Not a registered Email");
-    }
-    const token = await user.generateForgotPasswordToken();
-    if (!token) {
-      throw new ApiError(401, "token generation Failed");
-    }
-    await user.save();
-    // send token via email"
-    return res
-      .status(200)
-      .json(
-        new ApiResponse(
-          200,
-          token,
-          "Check your registered Email",
-        ),
-      );
-  } catch (error) {
-    return res
-      .status(500)
-      .json(new ApiError(500, "Internal Server Error", error.message));
-  }
-});
-
 const changeCurrentPassword = asyncHandler(async (req, res) => {
-  const incomingRefreshToken =
-    req.cookies.refreshToken || req.body.refreshToken;
+ 
   const newPassword = req.body.password;
   try {
-    if (!incomingRefreshToken) {
-      throw new ApiError(401, "Give a registerd Email");
-    }
     if (!newPassword) {
       throw new ApiError(401, "Provide a new password");
     }
-    const decodedToken = jwt.decode(
-      incomingRefreshToken,
-      process.env.JWT_REFRESH_TOKEN_SECRET,
-    );
-    if (!decodedToken) {
-      throw new ApiError(401, "Failed to Decode token");
-    }
-    const user = await User.findOne({ _id: decodedToken._id });
+    
+    const user = await User.findOne({ _id:req.user._id});
     if (!user) {
       throw new ApiError(401, "User not Found");
     }
     user.password = newPassword;
     const updatedUser = await user.save();
-    // console.log(updatedUser);
 
     return res
       .status(200)
@@ -353,17 +419,9 @@ const changeCurrentPassword = asyncHandler(async (req, res) => {
 });
 
 const getProfile = asyncHandler(async (req, res) => {
-  const incomingRefreshToken =
-    req.cookies.refreshToken || req.body.refreshToken;
   try {
-    if (!incomingRefreshToken) {
-      throw new ApiError(401, "Please login");
-    }
-    const decodedToken = jwt.decode(
-      incomingRefreshToken,
-      process.env.JWT_REFRESH_TOKEN_SECRET,
-    );
-    const user = await User.findOne({ _id: decodedToken._id }).select(
+
+    const user = await User.findOne({ _id: req.user._id }).select(
       "-password -refreshToken -refreshTokenExpiry -emailVerificationToken -emailVerificationTokenExpiry -forgotPasswordToken -forgotPasswordTokenExpiry",
     );
     if (!user) {

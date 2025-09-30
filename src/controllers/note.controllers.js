@@ -6,7 +6,7 @@ import mongoose from "mongoose";
 import { ApiResponse } from "../utils/api-response.js";
 
 const getNotes = asyncHandler(async (req, res) => {
-  // get all notes
+  // get all notes of a project
   const { projectId } = req.params;
   try {
     if (!projectId) {
@@ -25,7 +25,6 @@ const getNotes = asyncHandler(async (req, res) => {
     if (!notes) {
       throw new ApiError(400, "Notes not found");
     }
-
     return res
       .status(200)
       .json(new ApiResponse(200, notes, "notes fetched successfully"));
@@ -71,7 +70,7 @@ const createNote = asyncHandler(async (req, res) => {
       project: mongoose.Types.ObjectId(projectId),
     });
     if (!project) {
-      throw new ApiError(400, "project note found");
+      throw new ApiError(400, "project not found");
     }
     const createNote = await Note.create({
       project: projectId,
@@ -81,13 +80,13 @@ const createNote = asyncHandler(async (req, res) => {
     if (!createNote) {
       throw new ApiError(400, "note not created");
     }
-    const populatedUser = await Note.findById(createNote._id).populate(
+    const noteInfo = await Note.findById(createNote._id).populate(
       "createdBy",
       "username fullname avatar",
     );
     return res
       .status(200)
-      .json(new ApiResponse(200, populatedUser, "note created successfully"));
+      .json(new ApiResponse(200, noteInfo, "note created successfully"));
   } catch (error) {
     throw new ApiError(500, "Internal server error", error.message);
   }
@@ -128,8 +127,8 @@ const deleteNote = asyncHandler(async (req, res) => {
       throw new ApiError(400, "NoteId not found");
     }
     const note = await Note.findOneAndDelete(noteId);
-    if(!note){
-      throw new ApiError(400, "NoteId not found in database");
+    if (!note) {
+      throw new ApiError(400, "Note not found or already deleted");
     }
     return res
       .status(200)

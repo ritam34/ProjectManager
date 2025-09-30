@@ -23,16 +23,16 @@ router
   )
   .post(
     verifyJWT,
-    validateProjectPermission([UserRolesEnum.ADMIN]),
+    validateProjectPermission(AvailableUserRoles),
     createNote,
   );
 router
   .route("/:noteId")
   .get(verifyJWT, validateProjectPermission(AvailableUserRoles), getNoteById)
-  .put(verifyJWT, validateProjectPermission([UserRolesEnum.ADMIN]), updateNote)
+  .put(verifyJWT, validateProjectPermission(AvailableUserRoles), updateNote)
   .delete(
     verifyJWT,
-    validateProjectPermission([UserRolesEnum.ADMIN]),
+    validateProjectPermission(AvailableUserRoles),
     deleteNote,
   );
 export default router;

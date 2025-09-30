@@ -110,7 +110,7 @@ userSchema.methods.generateForgotPasswordToken = function () {
 
 userSchema.methods.generateAccessToken = function () {
   return jwt.sign(
-    { _id: this._id, username: this.username, email: this.email },
+    { _id: this._id},
     process.env.JWT_ACCESS_TOKEN_SECRET,
     { expiresIn: process.env.JWT_ACCESS_TOKEN_EXPIRES_IN },
   );
@@ -127,5 +127,15 @@ userSchema.methods.generateRefreshToken = function () {
   this.refreshToken = token;
   return token;
 };
+userSchema.methods.generateEmailVerificationToken = function () {
+  const token = crypto.randomBytes(32).toString("hex");
+  // store hashed token in db for security
+  this.emailVerificationToken = crypto
+    .createHash("sha256")
+    .update(token)
+    .digest("hex");
+  this.emailVerificationTokenExpiry = Date.now() + 10 * 60 * 1000;
+  return token;
+}
 
 export const User = mongoose.model("User", userSchema);

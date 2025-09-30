@@ -18,6 +18,15 @@ const taskSchema = new mongoose.Schema(
       enum: TaskStatusEnum,
       default: TaskStatusEnum[0],
     },
+    priority: {
+      type: String,
+      enum: ["Low", "Medium", "High"],
+      default: "Low",
+    },
+    dueDate: {
+      type: Date,
+      default: null,
+    },
     createdBy: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
@@ -31,12 +40,12 @@ const taskSchema = new mongoose.Schema(
     assignTo: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
-      required: true, //it depends on project structure
+      // required: true, //it depends on project structure
     },
     assignBy: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
-      required: true,
+      // required: true,
     },
     attachments: {
       type: [
