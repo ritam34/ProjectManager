@@ -27,7 +27,7 @@ router
     createNote,
   );
 router
-  .route("/:noteId")
+  .route("/:projectId/:noteId")
   .get(verifyJWT, validateProjectPermission(AvailableUserRoles), getNoteById)
   .put(verifyJWT, validateProjectPermission(AvailableUserRoles), updateNote)
   .delete(

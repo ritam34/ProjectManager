@@ -173,6 +173,7 @@ const deleteProject = asyncHandler(async (req, res) => {
   const session = await mongoose.startSession();
   session.startTransaction();
   try {
+    // check for atlas later
     if (!projectId) {
       throw new ApiError(400, "give a projectId to delete");
     }
@@ -190,7 +191,6 @@ const deleteProject = asyncHandler(async (req, res) => {
     await Task.deleteMany({ project: project._id }, { session });
     await Subtask.deleteMany({ project: project._id }, { session });
     await Note.deleteMany({ project: project._id }, { session });
-
     // Commit if everything is fine
     await session.commitTransaction();
     session.endSession();
@@ -198,37 +198,9 @@ const deleteProject = asyncHandler(async (req, res) => {
       .status(200)
       .json(new ApiResponse(200, null, "Project delete successfully"));
   } catch (error) {
-    if (error.message.includes("Transaction numbers are only allowed")) {
-      await session.abortTransaction();
-      session.endSession();
-      try {
-        const project = await Project.findOneAndDelete({
-          _id: req.params.projectId,
-          createdBy: req.user._id,
-        });
-
-        if (!project) {
-          throw new ApiError(
-            404,
-            "Project not found or you don't have permission",
-          );
-        }
-
-        await Promise.all([
-          ProjectMember.deleteMany({ project: project._id }),
-          Task.deleteMany({ project: project._id }),
-          Subtask.deleteMany({ project: project._id }),
-          Note.deleteMany({ project: project._id }),
-        ]);
-
-        return res.status(200).json({
-          success: true,
-          message: "Project and related data deleted successfully",
-        });
-      } catch (error) {
-        throw new ApiError(500, error.message || "Internal server Error");
-      }
-    }
+    await session.abortTransaction();
+    session.endSession();
+    throw new ApiError(500, error.message || "Internal server Error");
   }
 });
 
@@ -320,7 +292,7 @@ const updateMemberRole = asyncHandler(async (req, res) => {
       throw new ApiError(400, "give a projectId to update Member role");
     }
     if (!username) {
-      throw new ApiError(400, "give a usename to update member");
+      throw new ApiError(400, "give a username to update member");
     }
     const userId = await User.findOne({ username }).select("_id");
     if (!userId) {
@@ -328,6 +300,30 @@ const updateMemberRole = asyncHandler(async (req, res) => {
     }
     if (!role || !Object.values(AvailableUserRoles).includes(role)) {
       throw new ApiError(400, "give a valid role to update");
+    }
+    const project = await Project.findById(projectId);
+    if (!project) {
+      throw new ApiError(404, "Project not found");
+    }
+    if (project.createdBy.equals(userId._id) || req.user._id.equals(userId._id)) {
+      throw new ApiError(403, "Cannot update the role of project owner or your own");
+    }
+    const existingMember = await ProjectMember.findOne({
+      project: projectId,
+      user: userId,
+    });
+
+    if (!existingMember) {
+      throw new ApiError(404, "Member not found in this project");
+    }
+    if (existingMember.role === role) {
+      throw new ApiError(
+        400,
+        "user is already a member of this project with this role",
+      );
+    }
+    if(![UserRolesEnum.ADMIN, UserRolesEnum.PROJECT_ADMIN].includes(req.user.role)){
+      throw new ApiError(403, "you don't have permission to procced");
     }
     const memberRole = await ProjectMember.findOneAndUpdate(
       { user: userId, project: projectId },
@@ -359,10 +355,19 @@ const deleteMember = asyncHandler(async (req, res) => {
   if (!userId) {
     throw new ApiError(400, "user not found");
   }
+  const project = await Project.findById(projectId);
+
+  // check if userId is of creator of project
+  if (project.createdBy.equals(userId._id)) {
+    throw new ApiError(400, "you can't delete creator of project");
+  }
   try {
     if (
-      req.user.role !== UserRolesEnum.ADMIN &&
-      req.user.role !== UserRolesEnum.PROJECT_ADMIN
+      ![
+        ![UserRolesEnum.ADMIN, UserRolesEnum.PROJECT_ADMIN].includes(
+          req.user.role,
+        ),
+      ]
     ) {
       throw new ApiError(403, "you don't have permission to delete member");
     }
@@ -379,10 +384,8 @@ const deleteMember = asyncHandler(async (req, res) => {
     if (!memberDelete) {
       throw new ApiError(400, "user or project not found to delete");
     }
-    const project = await Project.findById(projectId);
     await Task.deleteMany({ project: project._id }, { session });
     await Subtask.deleteMany({ project: project._id }, { session });
-    await Note.deleteMany({ project: project._id }, { session });
 
     // Commit if everything is fine
     await session.commitTransaction();
@@ -392,30 +395,9 @@ const deleteMember = asyncHandler(async (req, res) => {
       .status(200)
       .json(new ApiResponse(200, null, "members delete successfully"));
   } catch (error) {
-    if (error.message.includes("Transaction numbers are only allowed")) {
-      try {
-        await session.abortTransaction();
-        session.endSession();
-        const memberDelete = await ProjectMember.findOneAndDelete({
-          user: userId,
-          project: projectId,
-        });
-        if (!memberDelete) {
-          throw new ApiError(400, "user or project not found to delete");
-        }
-        const project = await Project.findById(projectId);
-        await Promise.all([
-          Task.deleteMany({ project: project._id }),
-          Subtask.deleteMany({ project: project._id }),
-          Note.deleteMany({ project: project._id }),
-        ]);
-        return res
-          .status(200)
-          .json(new ApiResponse(200, null, "members delete successfully"));
-      } catch (error) {
-        throw new ApiError(500, error.message || "Internal server Error");
-      }
-    }
+    await session.abortTransaction();
+    session.endSession();
+    throw new ApiError(500, error.message || "Internal server Error");
   }
 });
 

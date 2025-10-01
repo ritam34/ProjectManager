@@ -41,7 +41,7 @@ export const validateProjectPermission = (roles = []) =>
       user: req.user._id,
     });
     if (!projectDetails) {
-      throw new ApiError(401, "Project not found");
+      throw new ApiError(401, "Project not found or you are not a member");
     }
     // check user role
     const givenrole = projectDetails?.role;

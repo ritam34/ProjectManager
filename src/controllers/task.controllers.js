@@ -3,10 +3,18 @@ import { ApiError } from "../utils/api-error.js";
 import { TaskStatusEnum } from "../utils/constants.js";
 import { ApiResponse } from "../utils/api-response.js";
 import { Subtask } from "../models/subtask.models.js";
-import {AvailableProjectPriority,AvailableUserRoles} from "../utils/constants.js";
+import { Note } from "../models/note.models.js";
+import { Project } from "../models/project.models.js";
+import {
+  AvailableProjectPriority,
+  AvailableUserRoles,
+  UserRolesEnum,
+} from "../utils/constants.js";
+import { asyncHandler } from "../utils/async.handler.js";
+import mongoose from "mongoose";
 
 // get all tasks
-const getTasks = async (req, res) => {
+const getTasks = asyncHandler(async (req, res) => {
   // get all tasks of a project
   const { projectId } = req.params;
   try {
@@ -27,10 +35,10 @@ const getTasks = async (req, res) => {
   } catch (error) {
     throw new ApiError(500, error.message || "Internal server Error");
   }
-};
+});
 
 // get task by id
-const getTaskById = async (req, res) => {
+const getTaskById = asyncHandler(async (req, res) => {
   // get task by id
   const { taskId } = req.params;
   try {
@@ -51,15 +59,19 @@ const getTaskById = async (req, res) => {
   } catch (error) {
     throw new ApiError(500, error.message || "Internal server Error");
   }
-};
+});
 
-const createTask = async (req, res) => {
+const createTask = asyncHandler(async (req, res) => {
   // create task
-  const { projectId } = req.params
+  const { projectId } = req.params;
   const { title, description, priority, dueDate } = req.body;
   // status,createdBy,project,assignBy,attachments, assignTo
   try {
-    if (!Object.values(AvailableUserRoles).includes(req.user.role)) {
+    if (
+      ![UserRolesEnum.ADMIN, UserRolesEnum.PROJECT_ADMIN].includes(
+        req.user.role,
+      )
+    ) {
       throw new ApiError(403, "you don't have permission to procced");
     }
     if (!title || !description || !priority || !dueDate) {
@@ -81,9 +93,7 @@ const createTask = async (req, res) => {
       createdBy: req.user._id,
       project: projectId,
       assignBy: req.user._id,
-    })
-      .populate("createdBy", "fullname email")
-      .populate("project", "name description");
+    });
     if (!task) {
       throw new ApiError(400, "task not created");
     }
@@ -93,11 +103,10 @@ const createTask = async (req, res) => {
   } catch (error) {
     throw new ApiError(500, error.message || "Internal server Error");
   }
-};
+});
 
 // update task
-const updateTask = async (req, res) => {
-  // update task
+const updateTask = asyncHandler(async (req, res) => {
   const { taskId } = req.params;
   const {
     title,
@@ -108,25 +117,19 @@ const updateTask = async (req, res) => {
     assignTo,
     attachments,
   } = req.body;
+
   try {
     if (!taskId) {
       throw new ApiError(400, "TaskId is required");
     }
-    if (req.user.role !== "Admin" || req.user.role !== "project-admin") {
-      throw new ApiError(403, "you don't have permission to procced");
-    }
     if (
-      !title ||
-      !description ||
-      !priority ||
-      !dueDate ||
-      !status ||
-      !assignTo ||
-      !attachments
+      ![UserRolesEnum.ADMIN, UserRolesEnum.PROJECT_ADMIN].includes(
+        req.user.role,
+      )
     ) {
-      throw new ApiError(400, "give something to update");
+      throw new ApiError(403, "You don't have permission to proceed");
     }
-    const updates = {
+    const updatableFields = {
       title,
       description,
       priority,
@@ -135,58 +138,74 @@ const updateTask = async (req, res) => {
       assignTo,
       attachments,
     };
-
-    // remove undefined (or null if you want)
-    Object.keys(updates).forEach((key) => {
-      if (updates[key] === undefined) {
-        delete updates[key];
+    const updateData = {};
+    Object.entries(updatableFields).forEach(([key, value]) => {
+      if (value !== undefined && value !== null) {
+        updateData[key] = value;
       }
     });
-    const task = await Task.findByIdAndUpdate(taskId, updates, { new: true });
-    if (!task) {
-      throw new ApiError(400, "task not found");
+
+    if (Object.keys(updateData).length === 0) {
+      throw new ApiError(400, "Provide at least one field to update");
     }
+
+    const task = await Task.findOneAndUpdate({ _id: taskId }, updateData, {
+      new: true,
+    });
+
+    if (!task) {
+      throw new ApiError(404, "Task not found");
+    }
+
     return res
       .status(200)
-      .json(new ApiResponse(200, task, "task updated successfully"));
+      .json(new ApiResponse(200, task, "Task updated successfully"));
   } catch (error) {
-    throw new ApiError(500, error.message || "Internal server Error");
+    throw new ApiError(500, error.message || "Internal Server Error");
   }
-};
+});
 
 // delete task
-const deleteTask = async (req, res) => {
+const deleteTask = asyncHandler(async (req, res) => {
   // delete task
   const { taskId } = req.params;
+  const session = await mongoose.startSession();
+  session.startTransaction();
   try {
     if (!taskId) {
       throw new ApiError(400, "TaskId is required");
     }
     if (
-      req.user.role !== "Admin" ||
-      req.user.role !== "project-admin" ||
-      req.user._id !== task.assignBy
+      ![UserRolesEnum.ADMIN, UserRolesEnum.PROJECT_ADMIN].includes(
+        req.user.role,
+      )
     ) {
       throw new ApiError(403, "you don't have permission to procced");
     }
-    const task = await Task.findByIdAndDelete(taskId);
+    const task = await Task.findOneAndDelete({ _id: taskId }, { session });
     if (!task) {
       throw new ApiError(400, "task not found");
     }
+    const project = await Project.findById(task.project);
+    if (!project) {
+      throw new ApiError(400, "project not found");
+    }
+    await Subtask.deleteMany({ project: project._id }, { session });
+    // Commit if everything is fine
+    await session.commitTransaction();
+    session.endSession();
     return res
       .status(200)
       .json(new ApiResponse(200, task, "task deleted successfully"));
   } catch (error) {
+    await session.abortTransaction();
+    session.endSession();
     throw new ApiError(500, error.message || "Internal server Error");
   }
-};
-
-// -----------------------------------
-// subtask controllers
-// feilds: title, description, status, priority, dueDate, createdBy, task, assignTo, attachments, isCompleted
+});
 
 // create subtask
-const createSubTask = async (req, res) => {
+const createSubTask = asyncHandler(async (req, res) => {
   // create subtask
   const { taskId } = req.params;
   const { title, description, priority, dueDate } = req.body;
@@ -194,17 +213,14 @@ const createSubTask = async (req, res) => {
     if (!taskId) {
       throw new ApiError(400, "TaskId is required");
     }
-    if (
-      req.user.role !== "admin" ||
-      req.user.role !== "project-admin" ||
-      req.user.role !== "member"
-    ) {
+    if (!Object.values(AvailableUserRoles).includes(req.user.role)) {
       throw new ApiError(403, "you don't have permission to procced");
     }
     if (!title || !description || !priority || !dueDate) {
       throw new ApiError(400, "All fields are required");
     }
-    const subtask = await SubTask.create({
+    // feilds: title, description, status, priority, dueDate, createdBy, task, assignTo, attachments, isCompleted
+    const subtask = await Subtask.create({
       title,
       description,
       priority,
@@ -222,21 +238,18 @@ const createSubTask = async (req, res) => {
   } catch (error) {
     throw new ApiError(500, error.message || "Internal server Error");
   }
-};
+});
 
-const getSubTasks = async (req, res) => {
+const getSubTasks = asyncHandler(async (req, res) => {
   // get all subtasks of a task
   const { taskId } = req.params;
   try {
     if (!taskId) {
       throw new ApiError(400, "TaskId is required");
     }
-    const subtasks = await SubTask.find({ task: taskId })
+    const subtasks = await Subtask.find({ task: taskId })
       .populate("createdBy", "username fullname avatar")
-      .populate("task", "title description")
-      .populate("assignTo", "username fullname avatar")
-      .populate("assignBy", "username fullname avatar")
-      .populate("attachments");
+      .populate("task", "title description");
     if (!subtasks) {
       throw new ApiError(400, "subtasks not found");
     }
@@ -246,21 +259,18 @@ const getSubTasks = async (req, res) => {
   } catch (error) {
     throw new ApiError(500, error.message || "Internal server Error");
   }
-};
+});
 
-const getSubTaskById = async (req, res) => {
+const getSubTaskById = asyncHandler(async (req, res) => {
   // get subtask by id
   const { subtaskId } = req.params;
   try {
     if (!subtaskId) {
       throw new ApiError(400, "SubtaskId is required");
     }
-    const subtask = await SubTask.findById(subtaskId)
+    const subtask = await Subtask.findById(subtaskId)
       .populate("createdBy", "username fullname avatar")
-      .populate("task", "title description")
-      .populate("assignTo", "username fullname avatar")
-      .populate("assignBy", "username fullname avatar")
-      .populate("attachments");
+      .populate("task", "title description");
     if (!subtask) {
       throw new ApiError(400, "subtask not found");
     }
@@ -270,10 +280,10 @@ const getSubTaskById = async (req, res) => {
   } catch (error) {
     throw new ApiError(500, error.message || "Internal server Error");
   }
-};
+});
 
 // update subtask
-const updateSubTask = async (req, res) => {
+const updateSubTask = asyncHandler(async (req, res) => {
   // update subtask
   const { subtaskId } = req.params;
   const {
@@ -290,26 +300,10 @@ const updateSubTask = async (req, res) => {
     if (!subtaskId) {
       throw new ApiError(400, "SubtaskId is required");
     }
-    if (
-      req.user.role !== "admin" ||
-      req.user.role !== "project-admin" ||
-      req.user.role !== "member"
-    ) {
+    if (!Object.values(AvailableUserRoles).includes(req.user.role)) {
       throw new ApiError(403, "you don't have permission to procced");
     }
-    if (
-      !title ||
-      !description ||
-      !priority ||
-      !dueDate ||
-      !status ||
-      !assignTo ||
-      !attachments ||
-      !isCompleted
-    ) {
-      throw new ApiError(400, "give something to update");
-    }
-    const updates = {
+    const updatableFields = {
       title,
       description,
       priority,
@@ -319,14 +313,18 @@ const updateSubTask = async (req, res) => {
       attachments,
       isCompleted,
     };
-
-    // remove undefined (or null if you want)
-    Object.keys(updates).forEach((key) => {
-      if (updates[key] === undefined) {
-        delete updates[key];
+    const updateData = {};
+    Object.entries(updatableFields).forEach(([key, value]) => {
+      if (value !== undefined && value !== null) {
+        updateData[key] = value;
       }
     });
-    const subtask = await SubTask.findByIdAndUpdate(subtaskId, updates, {
+
+    if (Object.keys(updateData).length === 0) {
+      throw new ApiError(400, "Provide at least one field to update");
+    }
+
+    const subtask = await Subtask.findByIdAndUpdate(subtaskId, updateData, {
       new: true,
     });
     if (!subtask) {
@@ -338,34 +336,38 @@ const updateSubTask = async (req, res) => {
   } catch (error) {
     throw new ApiError(500, error.message || "Internal server Error");
   }
-};
+});
 
 // delete subtask
-const deleteSubTask = async (req, res) => {
+const deleteSubTask = asyncHandler(async (req, res) => {
   // delete subtask
   const { subtaskId } = req.params;
+  const session = await mongoose.startSession();
+  session.startTransaction();
   try {
     if (!subtaskId) {
       throw new ApiError(400, "SubtaskId is required");
     }
     if (
-      req.user.role !== "admin" ||
-      req.user.role !== "project-admin" ||
-      req.user.role !== "member"
+      !Object.values(AvailableUserRoles).includes(req.user.role)
     ) {
       throw new ApiError(403, "you don't have permission to procced");
     }
-    const subtask = await SubTask.findByIdAndDelete(subtaskId);
+    const subtask = await Subtask.findByIdAndDelete(subtaskId,{session});
     if (!subtask) {
       throw new ApiError(400, "subtask not found");
     }
+    await session.commitTransaction();
+    session.endSession();
     return res
       .status(200)
       .json(new ApiResponse(200, subtask, "subtask deleted successfully"));
   } catch (error) {
+    await session.abortTransaction();
+    session.endSession();
     throw new ApiError(500, error.message || "Internal server Error");
   }
-};
+});
 
 export {
   createSubTask,

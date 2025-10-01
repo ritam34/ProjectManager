@@ -1,5 +1,5 @@
 import mongoose from "mongoose";
-import { TaskStatusEnum } from "../utils/constants.js";
+import { TaskStatusEnum, ProjectPriorityEnum } from "../utils/constants.js";
 
 // feilds: title, description, status, priority, dueDate, createdBy, task, assignTo, attachments, isCompleted
 
@@ -22,8 +22,8 @@ const subtaskSchema = new mongoose.Schema(
     },
     priority: {
       type: String,
-      enum: ["Low", "Medium", "High"],
-      default: "Low",
+      enum: ProjectPriorityEnum,
+      default: ProjectPriorityEnum[0],
     },
     dueDate: {
       type: Date,

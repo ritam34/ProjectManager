@@ -4,6 +4,7 @@ import { ApiError } from "../utils/api-error.js";
 import { Project } from "./../models/project.models.js";
 import mongoose from "mongoose";
 import { ApiResponse } from "../utils/api-response.js";
+import {UserRolesEnum} from "../utils/constants.js"
 
 const getNotes = asyncHandler(async (req, res) => {
   // get all notes of a project
@@ -13,13 +14,13 @@ const getNotes = asyncHandler(async (req, res) => {
       throw new ApiError(400, "Give a valid project");
     }
     const project = await Project.findById({
-      project: mongoose.Types.ObjectId(projectId),
+      _id:new mongoose.Types.ObjectId(projectId),
     });
     if (!project) {
       throw new ApiError(400, "Project not found");
     }
     const notes = await Note.find({
-      project: mongoose.Types.ObjectId(projectId),
+      project:new mongoose.Types.ObjectId(projectId),
     }).populate("createdBy", "username fullname avatar");
 
     if (!notes) {
@@ -29,7 +30,7 @@ const getNotes = asyncHandler(async (req, res) => {
       .status(200)
       .json(new ApiResponse(200, notes, "notes fetched successfully"));
   } catch (error) {
-    throw new ApiError(500, "Internal server error", error.message);
+    throw new ApiError(500, error.message || "Internal server error");
   }
 });
 
@@ -40,7 +41,7 @@ const getNoteById = asyncHandler(async (req, res) => {
     if (!noteId) {
       throw new ApiError(500, "Provide noteId");
     }
-    const singleNote = await Note.findOne(noteId).populate(
+    const singleNote = await Note.findOne({_id:noteId}).populate(
       "createdBy",
       "username fullname avatar",
     );
@@ -51,7 +52,7 @@ const getNoteById = asyncHandler(async (req, res) => {
       .status(200)
       .json(new ApiResponse(200, singleNote, "note fetched successfully"));
   } catch (error) {
-    throw new ApiError(500, "Internal server error", error.message);
+    throw new ApiError(500, error.message || "Internal server error");
   }
 });
 
@@ -67,7 +68,7 @@ const createNote = asyncHandler(async (req, res) => {
       throw new ApiError(400, "Note content is missing");
     }
     const project = await Project.findById({
-      project: mongoose.Types.ObjectId(projectId),
+      _id:new mongoose.Types.ObjectId(projectId),
     });
     if (!project) {
       throw new ApiError(400, "project not found");
@@ -88,7 +89,7 @@ const createNote = asyncHandler(async (req, res) => {
       .status(200)
       .json(new ApiResponse(200, noteInfo, "note created successfully"));
   } catch (error) {
-    throw new ApiError(500, "Internal server error", error.message);
+    throw new ApiError(500, error.message || "Internal server error");
   }
 });
 
@@ -115,7 +116,7 @@ const updateNote = asyncHandler(async (req, res) => {
       .status(200)
       .json(new ApiResponse(200, UpadtedNote, "note updated successfully"));
   } catch (error) {
-    throw new ApiError(500, "Internal server error", error.message);
+    throw new ApiError(500, error.message || "Internal server error");
   }
 });
 
@@ -126,7 +127,10 @@ const deleteNote = asyncHandler(async (req, res) => {
     if (!noteId) {
       throw new ApiError(400, "NoteId not found");
     }
-    const note = await Note.findOneAndDelete(noteId);
+    if(![UserRolesEnum.ADMIN, UserRolesEnum.PROJECT_ADMIN].includes(req.user.role)){
+      throw new ApiError(403, "you don't have permission to procced");
+    }
+    const note = await Note.findOneAndDelete({_id:noteId});
     if (!note) {
       throw new ApiError(400, "Note not found or already deleted");
     }
@@ -134,7 +138,7 @@ const deleteNote = asyncHandler(async (req, res) => {
       .status(200)
       .json(new ApiResponse(200, null, "note deleted successfully"));
   } catch (error) {
-    throw new ApiError(500, "Internal server error", error.message);
+    throw new ApiError(500, error.message || "Internal server error");
   }
 });
 

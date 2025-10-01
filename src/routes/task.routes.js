@@ -22,12 +22,12 @@ router
   .get(verifyJWT, validateProjectPermission(AvailableUserRoles), getTasks)
   .post(verifyJWT, validateProjectPermission([UserRolesEnum.ADMIN,UserRolesEnum.PROJECT_ADMIN]), createTask);
 router
-  .route("/:taskId")
+  .route("/:projectId/:taskId")
   .get(verifyJWT, validateProjectPermission(AvailableUserRoles), getTaskById)
   .put(verifyJWT, validateProjectPermission([UserRolesEnum.ADMIN,UserRolesEnum.PROJECT_ADMIN]), updateTask)
   .delete(verifyJWT, validateProjectPermission([UserRolesEnum.ADMIN,UserRolesEnum.PROJECT_ADMIN]), deleteTask);
 router
-  .route("/:taskId/subtasks")
+  .route("/:projectId/:taskId/subtasks")
   .get(verifyJWT, validateProjectPermission(AvailableUserRoles), getSubTasks)
   .post(
     verifyJWT,
@@ -35,7 +35,7 @@ router
     createSubTask,
   );
 router
-  .route("/:taskId/subtasks/:subtaskId")
+  .route("/:projectId/:taskId/subtasks/:subtaskId")
   .get(verifyJWT, validateProjectPermission(AvailableUserRoles), getSubTaskById)
   .put(verifyJWT, validateProjectPermission(AvailableUserRoles), updateSubTask)
   .delete(
